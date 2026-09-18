@@ -89,6 +89,9 @@ func (s *Streamer[T, K]) Stream(ctx context.Context, inputChan <-chan T) (<-chan
 		Quit:        s.quit,
 	})
 	if err != nil {
+		s.mu.Lock()
+		s.isProcessing = false
+		s.mu.Unlock()
 		if cancel != nil {
 			cancel()
 		}

@@ -754,3 +754,28 @@ func TestStreamer_StreamerTimeoutDeliversBufferedResults(t *testing.T) {
 
 	assert.Equal(t, count, got)
 }
+
+func TestStreamer_FanOutErrorResetsProcessing(t *testing.T) {
+	streamer, err := NewStreamer(NewStreamerParams[int, int]{
+		WorkerCount: 1,
+		Work: func(ctx context.Context, n int) (int, error) {
+			return n, nil
+		},
+	})
+	require.NoError(t, err)
+
+	_, _, err = streamer.Stream(context.Background(), nil)
+	require.Error(t, err)
+
+	input := make(chan int)
+	close(input)
+
+	results, errs, err := streamer.Stream(context.Background(), input)
+	require.NoError(t, err)
+
+	for range results {
+	}
+	for e := range errs {
+		require.NoError(t, e)
+	}
+}
