@@ -108,7 +108,7 @@ func WithAllOf(conditions ...RetryCondition) RetryCondition {
 // WithRetries adds a retry count to the workers
 func WithRetries(maxAttempts int) RetryOption {
 	return func(c *RetryConfig) {
-		c.maxAttempts = maxAttempts
+		c.maxAttempts = max(maxAttempts, 1)
 	}
 }
 
@@ -125,8 +125,19 @@ func WithLinearBackoff(baseDelay time.Duration) RetryOption {
 func WithExponentialBackoff(baseDelay time.Duration, maxDelay time.Duration) RetryOption {
 	return func(c *RetryConfig) {
 		c.backoffFunc = func(attempt int) time.Duration {
-			delay := min(baseDelay*time.Duration(1<<uint(attempt-1)), maxDelay)
-			return delay
+			if baseDelay <= 0 {
+				return 0
+			}
+
+			shift := attempt - 1
+			if shift < 0 {
+				shift = 0
+			}
+			if baseDelay > maxDelay>>uint(shift) {
+				return maxDelay
+			}
+
+			return min(baseDelay<<uint(shift), maxDelay)
 		}
 	}
 }

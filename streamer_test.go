@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
@@ -623,4 +624,192 @@ func TestStreamer_StreamerTimeout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStreamer_Reuse(t *testing.T) {
+	streamer, err := NewStreamer(NewStreamerParams[int, int]{
+		WorkerCount: 2,
+		Work: func(ctx context.Context, n int) (int, error) {
+			return n * 2, nil
+		},
+	})
+	require.NoError(t, err)
+
+	for round := range 2 {
+		input := make(chan int)
+		go func() {
+			defer close(input)
+			for i := range 5 {
+				input <- i
+			}
+		}()
+
+		results, errs, err := streamer.Stream(context.Background(), input)
+		require.NoError(t, err, "round %d", round)
+
+		got := 0
+		for range results {
+			got++
+		}
+		for e := range errs {
+			require.NoError(t, e)
+		}
+		streamer.Flush()
+		assert.Equal(t, 5, got, "round %d", round)
+	}
+}
+
+func TestStreamer_FlushReturnsAfterCancelWithUnreadOutput(t *testing.T) {
+	tests := []struct {
+		name string
+		work func(ctx context.Context, n int) (int, error)
+	}{
+		{
+			name: "unread error channel",
+			work: func(ctx context.Context, n int) (int, error) {
+				return 0, errors.New("boom")
+			},
+		},
+		{
+			name: "unread output channel",
+			work: func(ctx context.Context, n int) (int, error) {
+				return n, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			streamer, err := NewStreamer(NewStreamerParams[int, int]{
+				WorkerCount: 1,
+				Work:        tt.work,
+			})
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			input := make(chan int)
+			go func() {
+				defer close(input)
+				for i := range 500 {
+					select {
+					case input <- i:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+
+			_, _, err = streamer.Stream(ctx, input)
+			require.NoError(t, err)
+
+			time.Sleep(200 * time.Millisecond)
+			cancel()
+
+			flushed := make(chan struct{})
+			go func() {
+				streamer.Flush()
+				close(flushed)
+			}()
+
+			select {
+			case <-flushed:
+			case <-time.After(2 * time.Second):
+				t.Fatal("Flush did not return after context cancellation")
+			}
+		})
+	}
+}
+
+func TestStreamer_StreamerTimeoutDeliversBufferedResults(t *testing.T) {
+	timeout := 10 * time.Second
+	streamer, err := NewStreamer(NewStreamerParams[int, int]{
+		WorkerCount:     1,
+		StreamerTimeout: &timeout,
+		Work: func(ctx context.Context, n int) (int, error) {
+			return n, nil
+		},
+	})
+	require.NoError(t, err)
+
+	const count = 150
+	input := make(chan int, count)
+	for i := range count {
+		input <- i
+	}
+	close(input)
+
+	results, errs, err := streamer.Stream(context.Background(), input)
+	require.NoError(t, err)
+
+	streamer.Flush()
+
+	got := 0
+	for range results {
+		got++
+	}
+	for e := range errs {
+		require.NoError(t, e)
+	}
+
+	assert.Equal(t, count, got)
+}
+
+func TestStreamer_FanOutErrorResetsProcessing(t *testing.T) {
+	streamer, err := NewStreamer(NewStreamerParams[int, int]{
+		WorkerCount: 1,
+		Work: func(ctx context.Context, n int) (int, error) {
+			return n, nil
+		},
+	})
+	require.NoError(t, err)
+
+	_, _, err = streamer.Stream(context.Background(), nil)
+	require.Error(t, err)
+
+	input := make(chan int)
+	close(input)
+
+	results, errs, err := streamer.Stream(context.Background(), input)
+	require.NoError(t, err)
+
+	for range results {
+	}
+	for e := range errs {
+		require.NoError(t, e)
+	}
+}
+
+func TestStreamer_StreamerTimeoutFreesForwardersWithUnreadResults(t *testing.T) {
+	before := runtime.NumGoroutine()
+
+	timeout := 100 * time.Millisecond
+	streamer, err := NewStreamer(NewStreamerParams[int, int]{
+		WorkerCount:     1,
+		StreamerTimeout: &timeout,
+		Work: func(ctx context.Context, n int) (int, error) {
+			return n, nil
+		},
+	})
+	require.NoError(t, err)
+
+	const count = 300
+	input := make(chan int, count)
+	for i := range count {
+		input <- i
+	}
+	close(input)
+
+	_, _, err = streamer.Stream(context.Background(), input)
+	require.NoError(t, err)
+
+	streamer.Flush()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	assert.LessOrEqual(t, runtime.NumGoroutine(), before, "goroutines leaked after streamer timeout")
 }
