@@ -624,3 +624,36 @@ func TestStreamer_StreamerTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestStreamer_Reuse(t *testing.T) {
+	streamer, err := NewStreamer(NewStreamerParams[int, int]{
+		WorkerCount: 2,
+		Work: func(ctx context.Context, n int) (int, error) {
+			return n * 2, nil
+		},
+	})
+	require.NoError(t, err)
+
+	for round := range 2 {
+		input := make(chan int)
+		go func() {
+			defer close(input)
+			for i := range 5 {
+				input <- i
+			}
+		}()
+
+		results, errs, err := streamer.Stream(context.Background(), input)
+		require.NoError(t, err, "round %d", round)
+
+		got := 0
+		for range results {
+			got++
+		}
+		for e := range errs {
+			require.NoError(t, e)
+		}
+		streamer.Flush()
+		assert.Equal(t, 5, got, "round %d", round)
+	}
+}

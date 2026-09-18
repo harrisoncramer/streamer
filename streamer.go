@@ -77,6 +77,8 @@ func (s *Streamer[T, K]) Stream(ctx context.Context, inputChan <-chan T) (<-chan
 		return nil, nil, errors.New("processor is already working")
 	}
 	s.isProcessing = true
+	wg := &sync.WaitGroup{}
+	s.wg = wg
 	s.mu.Unlock()
 
 	// Use FanOut to distribute work
@@ -97,7 +99,7 @@ func (s *Streamer[T, K]) Stream(ctx context.Context, inputChan <-chan T) (<-chan
 	errorChan := make(chan error, s.workerCount*10) // Buffer error channel, to reduce slowdown
 
 	for i, workerChannel := range workerChannels {
-		s.wg.Add(1)
+		wg.Add(1)
 
 		// For each worker channel, create a result channel
 		outputChan := make(chan K, 100)
@@ -107,7 +109,7 @@ func (s *Streamer[T, K]) Stream(ctx context.Context, inputChan <-chan T) (<-chan
 		// Take the value read, and pass it to the work function. Send any errors to the error channel and any outputs to the output channel.
 		go func(workerID int, inputs <-chan T, output chan<- K) {
 			defer close(output)
-			defer s.wg.Done()
+			defer wg.Done()
 			for input := range inputs {
 				workCtx := ctx
 				var cancel context.CancelFunc
@@ -131,10 +133,9 @@ func (s *Streamer[T, K]) Stream(ctx context.Context, inputChan <-chan T) (<-chan
 
 	// Close the error channel and reset the streamer's state when workers finish
 	go func() {
-		s.wg.Wait()
+		wg.Wait()
 		close(errorChan)
 		s.mu.Lock()
-		s.wg = nil
 		s.isProcessing = false
 		s.mu.Unlock()
 		if cancel != nil {
