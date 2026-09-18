@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Test errors for sentinel error testing
@@ -430,4 +431,35 @@ func TestCreateRetryableWorkFunc_Integration(t *testing.T) {
 	// Should have taken at least 50ms (one backoff period)
 	assert.Greater(t, duration, 40*time.Millisecond)
 	assert.Less(t, duration, 150*time.Millisecond)
+}
+
+func TestCreateRetryableWorkFunc_NonPositiveAttempts(t *testing.T) {
+	tests := []struct {
+		name        string
+		maxAttempts int
+	}{
+		{
+			name:        "zero attempts",
+			maxAttempts: 0,
+		},
+		{
+			name:        "negative attempts",
+			maxAttempts: -3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			work := CreateRetryableWorkFunc(func(ctx context.Context, n int) (int, error) {
+				calls++
+				return n * 2, nil
+			}, WithRetries(tt.maxAttempts))
+
+			result, err := work(context.Background(), 21)
+			require.NoError(t, err)
+			assert.Equal(t, 42, result)
+			assert.Equal(t, 1, calls)
+		})
+	}
 }

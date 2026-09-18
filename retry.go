@@ -108,7 +108,7 @@ func WithAllOf(conditions ...RetryCondition) RetryCondition {
 // WithRetries adds a retry count to the workers
 func WithRetries(maxAttempts int) RetryOption {
 	return func(c *RetryConfig) {
-		c.maxAttempts = maxAttempts
+		c.maxAttempts = max(maxAttempts, 1)
 	}
 }
 
