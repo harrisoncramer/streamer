@@ -463,3 +463,32 @@ func TestCreateRetryableWorkFunc_NonPositiveAttempts(t *testing.T) {
 		})
 	}
 }
+
+func TestWithExponentialBackoff_LargeAttempts(t *testing.T) {
+	tests := []struct {
+		name    string
+		attempt int
+	}{
+		{
+			name:    "attempt overflows multiplication",
+			attempt: 35,
+		},
+		{
+			name:    "attempt overflows shift",
+			attempt: 64,
+		},
+		{
+			name:    "attempt exceeds shift width",
+			attempt: 70,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := RetryConfig{}
+			WithExponentialBackoff(time.Second, time.Minute)(&config)
+
+			assert.Equal(t, time.Minute, config.backoffFunc(tt.attempt))
+		})
+	}
+}
