@@ -720,3 +720,37 @@ func TestStreamer_FlushReturnsAfterCancelWithUnreadOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestStreamer_StreamerTimeoutDeliversBufferedResults(t *testing.T) {
+	timeout := 10 * time.Second
+	streamer, err := NewStreamer(NewStreamerParams[int, int]{
+		WorkerCount:     1,
+		StreamerTimeout: &timeout,
+		Work: func(ctx context.Context, n int) (int, error) {
+			return n, nil
+		},
+	})
+	require.NoError(t, err)
+
+	const count = 150
+	input := make(chan int, count)
+	for i := range count {
+		input <- i
+	}
+	close(input)
+
+	results, errs, err := streamer.Stream(context.Background(), input)
+	require.NoError(t, err)
+
+	streamer.Flush()
+
+	got := 0
+	for range results {
+		got++
+	}
+	for e := range errs {
+		require.NoError(t, e)
+	}
+
+	assert.Equal(t, count, got)
+}
