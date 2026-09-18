@@ -133,7 +133,7 @@ func WithExponentialBackoff(baseDelay time.Duration, maxDelay time.Duration) Ret
 			if shift < 0 {
 				shift = 0
 			}
-			if shift >= 62 || baseDelay > maxDelay>>uint(shift) {
+			if baseDelay > maxDelay>>uint(shift) {
 				return maxDelay
 			}
 

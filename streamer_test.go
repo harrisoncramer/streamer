@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
@@ -778,4 +779,37 @@ func TestStreamer_FanOutErrorResetsProcessing(t *testing.T) {
 	for e := range errs {
 		require.NoError(t, e)
 	}
+}
+
+func TestStreamer_StreamerTimeoutFreesForwardersWithUnreadResults(t *testing.T) {
+	before := runtime.NumGoroutine()
+
+	timeout := 100 * time.Millisecond
+	streamer, err := NewStreamer(NewStreamerParams[int, int]{
+		WorkerCount:     1,
+		StreamerTimeout: &timeout,
+		Work: func(ctx context.Context, n int) (int, error) {
+			return n, nil
+		},
+	})
+	require.NoError(t, err)
+
+	const count = 300
+	input := make(chan int, count)
+	for i := range count {
+		input <- i
+	}
+	close(input)
+
+	_, _, err = streamer.Stream(context.Background(), input)
+	require.NoError(t, err)
+
+	streamer.Flush()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	assert.LessOrEqual(t, runtime.NumGoroutine(), before, "goroutines leaked after streamer timeout")
 }

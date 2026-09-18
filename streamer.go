@@ -63,7 +63,6 @@ func NewStreamer[T any, K any](params NewStreamerParams[T, K]) (*Streamer[T, K],
 // Stream pipes the inputs provided through the streamer's work function and returns result and error channels.
 func (s *Streamer[T, K]) Stream(ctx context.Context, inputChan <-chan T) (<-chan K, <-chan error, error) {
 
-	parentCtx := ctx
 	var cancel context.CancelFunc
 	if s.streamerTimeout != nil {
 		ctx, cancel = context.WithTimeout(ctx, *s.streamerTimeout)
@@ -146,18 +145,36 @@ func (s *Streamer[T, K]) Stream(ctx context.Context, inputChan <-chan T) (<-chan
 		s.mu.Lock()
 		s.isProcessing = false
 		s.mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
 	}()
 
 	// Use FanIn to aggregate results from all the workers, and return the single channel
-	results, err := fan.FanIn(parentCtx, fan.FanInParams[K]{
+	results, err := fan.FanIn(ctx, fan.FanInParams[K]{
 		InputChannels: outputChannels,
 		Quit:          s.quit,
 	})
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, nil, err
+	}
 
-	return results, errorChan, err
+	if cancel == nil {
+		return results, errorChan, nil
+	}
+
+	drained := make(chan K)
+	go func() {
+		defer cancel()
+		defer close(drained)
+		for res := range results {
+			if !send(ctx, s.quit, drained, res) {
+				return
+			}
+		}
+	}()
+
+	return drained, errorChan, nil
 }
 
 // Flush can be used ensure that all of the values supplied to the streamer's input channel have been worked.
