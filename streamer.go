@@ -123,9 +123,13 @@ func (s *Streamer[T, K]) Stream(ctx context.Context, inputChan <-chan T) (<-chan
 				}
 
 				if err != nil {
-					errorChan <- err
+					if !send(ctx, s.quit, errorChan, err) {
+						return
+					}
 				} else {
-					output <- res
+					if !send(ctx, s.quit, output, res) {
+						return
+					}
 				}
 			}
 		}(i, workerChannel, outputChan)
@@ -159,5 +163,22 @@ func (s *Streamer[T, K]) Flush() {
 	s.mu.RUnlock()
 	if wg != nil {
 		wg.Wait()
+	}
+}
+
+func send[V any](ctx context.Context, quit <-chan int, ch chan<- V, value V) bool {
+	select {
+	case ch <- value:
+		return true
+	default:
+	}
+
+	select {
+	case ch <- value:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-quit:
+		return false
 	}
 }
